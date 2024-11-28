@@ -82,6 +82,7 @@ local WIDTH = 100
 local HEIGHT = 100
 local resolution = {WIDTH, HEIGHT}
 local targetSpeed
+local targetSpeedVal -- Actual entered speed value for normal cruise
 local data
 local debug
 local vehicleID
@@ -453,6 +454,51 @@ local function adjustThrottle(velocityDifference)
     return throttlePower
 end
 
+-----------------------------------------------------------------
+
+-- MPCOverride to remove edge case when target vehicle leaves range
+local function MPCOverride(targetSpeedVal)
+
+    ui_message("Cruise Override", 0.01, "Tech", "forward")
+
+    local velocityyx = obj:getVelocity().x
+    local velocityyy = obj:getVelocity().y
+    local velocityyz = obj:getVelocity().z
+
+    local currentSpeed = electrics.values.wheelspeed -- speed of the vehicle with the acc
+    local velocityy = math.sqrt(velocityyx ^ 2 + velocityyy ^ 2 + velocityyz ^ 2)
+
+    -- local Kmpc = computeKmpc()
+    -- -- Change in u
+    -- local deltaU = Kmpc[1] * velocityy + Kmpc[2] * pastU + Kmpc[3] * targetSpeed + Kmpc[4] * targetSpeed + Kmpc[5] *
+    --                    targetSpeed + Kmpc[6] * targetSpeed + Kmpc[7] * targetSpeed
+    -- local u = pastU + deltaU
+
+    local u = adjustThrottle(targetSpeedVal)
+
+    pastU = u
+
+    if pastU ~= pastU then
+        pastU = 0
+    end
+
+    if (math.abs(targetSpeedVal - currentSpeed)) <= 1 then
+        electrics.values.throttleOverride = nil
+    elseif electrics.values.brake > 0.05 then
+        electrics.values.throttleOverride = nil
+    elseif electrics.values.throttle > 0.05 then
+        electrics.values.brakeOverride = nil
+    elseif electrics.values.isShifting then
+        u = adjustThrottle(targetSpeedVal)
+    elseif u > 0 then
+        electrics.values.throttleOverride = u
+    end
+
+    log("I", "", "targetSpeed: " .. tostring(targetSpeedVal))
+
+end
+-----------------------------------------------------------------
+
 -- Main MPC
 local function MPC(mode, encodedDistances, targetSpeedIn, inputSpeed, vehicleID, dtSim, debug)
     local targetSpeedIn = math.floor(targetSpeedIn * 10) / 10
@@ -527,94 +573,58 @@ local function MPC(mode, encodedDistances, targetSpeedIn, inputSpeed, vehicleID,
     local leaderSpeedingState = detectSpeedTrend(targetSpeed, targetSpeedIn) -- using the leading speed value in this function 
 
     -- MPC override to prevent reverse behaivior when stopping
-    if velocityy < 12.0 then
-        -- log("I", "", "Distance to leadCar: " .. tostring(distanceToLeadCar))
-        u = (-1 / (distanceToLeadCar / 5))
-        if velocityy < 0.1 then
-            electrics.values.parkingbrake = 1
-            u = 0
-            -- log("I", "", "Velocity is below threshold: " .. tostring(velocityy))
+    -- if velocityy < 12.0 then
+    --     -- log("I", "", "Distance to leadCar: " .. tostring(distanceToLeadCar))
+    --     u = (-1 / (distanceToLeadCar / 5))
+    --     if velocityy < 0.1 then
+    --         electrics.values.parkingbrake = 1
+    --         u = 0
+    --         -- log("I", "", "Velocity is below threshold: " .. tostring(velocityy))
+    --     end
+    --     -- log("I", "", "Velocity under limit: " .. tostring(u))
+    -- end
+
+    if velocityy > 9.0 then
+
+        if electrics.values.isShifting and velDiff < 0 and distanceToLeadCar - targetDistance > 0 then
+            u = adjustThrottle(targetSpeed)
+
         end
-        -- log("I", "", "Velocity under limit: " .. tostring(u))
-    end
 
-    if electrics.values.isShifting and velDiff < 0 and distanceToLeadCar - targetDistance > 0 then
-        u = adjustThrottle(targetSpeed)
+        if maintainSpeedFlag == true then
+            u = pastU
+        end
 
-    end
+        if u > 0 then
+            electrics.values.throttleOverride = u
+            electrics.values.brakeOverride = nil
+        elseif (u == 0 and targetSpeed > 0) then -- added for ego vehicle to move once leader vehicle moves
+            electrics.values.throttleOverride = u
+            electrics.values.brakeOverride = nil
+        elseif (currentSpeed < 0) then
+            u = 0
+        else
+            u = u / 3
+            electrics.values.throttleOverride = nil
+            electrics.values.brakeOverride = -u -- stopping and pressing breaks
+        end
 
-    if maintainSpeedFlag == true then
-        u = pastU
-    end
+        if debug then
+            local time = math.floor(timer * 1000) / 1000 -- Make sure time doesn't have dozen of digits 
+            csvData:add(time, velocityy, targetSpeed, u)
+            timer = timer + dtSim
+        end
 
-    if u > 0 then
-        electrics.values.throttleOverride = u
-        electrics.values.brakeOverride = nil
-    elseif (u == 0 and targetSpeed > 0) then -- added for ego vehicle to move once leader vehicle moves
-        electrics.values.throttleOverride = u
-        electrics.values.brakeOverride = nil
-    elseif (currentSpeed < 0) then
-        u = 0
+        pastU = u
+
+        prevSpeed = velocityy
+
+        vehiclesOldData[vehicleID] = distanceToCars
     else
-        u = u / 3
-        electrics.values.throttleOverride = nil
-        electrics.values.brakeOverride = -u -- stopping and pressing breaks
+        MPCOverride(9)
     end
-
-    if debug then
-        local time = math.floor(timer * 1000) / 1000 -- Make sure time doesn't have dozen of digits 
-        csvData:add(time, velocityy, targetSpeed, u)
-        timer = timer + dtSim
-    end
-
-    pastU = u
-
-    prevSpeed = velocityy
-
-    vehiclesOldData[vehicleID] = distanceToCars
 end
 
------------------------------------------------------------------
-
--- MPCOverride to remove edge case when target vehicle leaves range
-local function MPCOverride(targetSpeed)
-
-    local velocityyx = obj:getVelocity().x
-    local velocityyy = obj:getVelocity().y
-    local velocityyz = obj:getVelocity().z
-
-    local currentSpeed = electrics.values.wheelspeed -- speed of the vehicle with the acc
-    local velocityy = math.sqrt(velocityyx ^ 2 + velocityyy ^ 2 + velocityyz ^ 2)
-
-    -- local Kmpc = computeKmpc()
-    -- -- Change in u
-    -- local deltaU = Kmpc[1] * velocityy + Kmpc[2] * pastU + Kmpc[3] * targetSpeed + Kmpc[4] * targetSpeed + Kmpc[5] *
-    --                    targetSpeed + Kmpc[6] * targetSpeed + Kmpc[7] * targetSpeed
-    -- local u = pastU + deltaU
-
-    local u = adjustThrottle(targetSpeed)
-
-    pastU = u
-
-    if pastU ~= pastU then
-        pastU = 0
-    end
-
-    if (math.abs(targetSpeed - currentSpeed)) <= 1 then
-        electrics.values.throttleOverride = nil
-    elseif electrics.values.brake > 0.05 then
-        electrics.values.throttleOverride = nil
-    elseif electrics.values.throttle > 0.05 then
-        electrics.values.brakeOverride = nil
-    elseif electrics.values.isShifting then
-        u = adjustThrottle(targetSpeed)
-    elseif u > 0 then
-        electrics.values.throttleOverride = u
-    end
-
-    log("I", "", "pastU: " .. tostring(pastU))
-
-end
 -----------------------------------------------------------------
 
 local function changeSpeed(speed)
@@ -759,7 +769,7 @@ local function updateGFX(dtSim)
         local inputSpeed = 3
         MPC(mode, distance, targetSpeed, inputSpeed, vehicleID, dtSim, debug)
     else
-        MPCOverride(targetSpeed)
+        MPCOverride(targetSpeedVal)
     end
 end
 
@@ -804,6 +814,7 @@ local function loadAccWithID(vid, speed, debugFlag)
     assert(vid >= 0, "adaptiveCruiseControlWithRadar.lua - Failed to get a valid vehicle ID")
     local radarArgs = {}
     targetSpeed = speed
+    targetSpeedVal = speed -- Actual entered speed value for normal cruise
     getMass()
 
     debug = debugFlag
