@@ -429,16 +429,6 @@ local function detectSpeedTrend(currentSpeed, targetSpeedIn) -- function for cal
 
     local averageSpeed = calcAvgSpeed(leaderSpeedBuffer)
     local threshold = 0.1 -- threshold for detecting the acceleration of decelration
-
-    if targetSpeedIn == 0 then
-        return "Car Stopped"
-    elseif currentSpeed > averageSpeed + threshold then
-        return "Accelerating"
-    elseif currentSpeed < averageSpeed - threshold then
-        return "Decelerating"
-    else
-        return "Maintaining Speed"
-    end
 end
 
 local function adjustThrottle(velocityDifference)
@@ -621,7 +611,7 @@ local function MPC(mode, encodedDistances, targetSpeedIn, inputSpeed, vehicleID,
 
         vehiclesOldData[vehicleID] = distanceToCars
     else
-        MPCOverride(9)
+        MPCOverride(currentSpeed)
     end
 end
 
@@ -769,7 +759,14 @@ local function updateGFX(dtSim)
         local inputSpeed = 3
         MPC(mode, distance, targetSpeed, inputSpeed, vehicleID, dtSim, debug)
     else
-        MPCOverride(targetSpeedVal)
+        local currentSpeed = electrics.values.wheelspeed
+        if currentSpeed >= 0 then
+            currentSpeed = math.floor(currentSpeed + 0.5)
+        else
+            currentSpeed = math.ceil(currentSpeed - 0.5)
+        end
+        log('I', '', tostring(currentSpeed))
+        MPCOverride(currentSpeed + 1)
     end
 end
 
