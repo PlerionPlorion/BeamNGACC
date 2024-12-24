@@ -446,30 +446,37 @@ end
 
 -----------------------------------------------------------------
 
+
+local throttleValue = 0 -- Initialize a persistent throttle value
+local lastUpdateTime = nil -- Initialize last update time for deltaTime calculation
+
 -- MPCOverride to remove edge case when target vehicle leaves range
 local function MPCOverride(targetSpeedVal)
-
     ui_message("Cruise Override", 0.01, "Tech", "forward")
 
+    -- Calculate the time elapsed since the last update
+    local currentTime = os.clock()
+    local deltaTime = currentTime - (lastUpdateTime or currentTime)
+    lastUpdateTime = currentTime
+
+    deltaTime = math.min(deltaTime, 0.1)
+    
     local velocityyx = obj:getVelocity().x
     local velocityyy = obj:getVelocity().y
     local velocityyz = obj:getVelocity().z
 
-    local currentSpeed = electrics.values.wheelspeed -- speed of the vehicle with the acc
+    local currentSpeed = electrics.values.wheelspeed -- Speed of the vehicle
     local velocityy = math.sqrt(velocityyx ^ 2 + velocityyy ^ 2 + velocityyz ^ 2)
 
-    -- local Kmpc = computeKmpc()
-    -- -- Change in u
-    -- local deltaU = Kmpc[1] * velocityy + Kmpc[2] * pastU + Kmpc[3] * targetSpeed + Kmpc[4] * targetSpeed + Kmpc[5] *
-    --                    targetSpeed + Kmpc[6] * targetSpeed + Kmpc[7] * targetSpeed
-    -- local u = pastU + deltaU
+    -- Compute throttle adjustment
+    local targetThrottle = adjustThrottle(targetSpeedVal)
 
-    local u = adjustThrottle(targetSpeedVal)
-
-    pastU = u
-
-    if pastU ~= pastU then
-        pastU = 0
+    -- Throttle smoothing logic
+    local throttleTransitionRate = 0.05 -- Determines how quickly throttle changes
+    if throttleValue < targetThrottle then
+        throttleValue = math.min(throttleValue + throttleTransitionRate * deltaTime, targetThrottle)
+    elseif throttleValue > targetThrottle then
+        throttleValue = math.max(throttleValue - throttleTransitionRate * deltaTime, targetThrottle)
     end
 
     if (math.abs(targetSpeedVal - currentSpeed)) <= 1 then
@@ -479,14 +486,18 @@ local function MPCOverride(targetSpeedVal)
     elseif electrics.values.throttle > 0.05 then
         electrics.values.brakeOverride = nil
     elseif electrics.values.isShifting then
-        u = adjustThrottle(targetSpeedVal)
-    elseif u > 0 then
-        electrics.values.throttleOverride = u
+        targetThrottle = adjustThrottle(targetSpeedVal)
+    elseif throttleValue > 0 then
+        electrics.values.throttleOverride = throttleValue
     end
 
-    log("I", "", "targetSpeed: " .. tostring(targetSpeedVal))
-
+    -- Log output for debugging
+    log("I", "", "targetSpeed: " .. tostring(targetSpeedVal) 
+        .. ", currentSpeed: " .. tostring(currentSpeed)
+        .. ", targetThrottle: " .. tostring(targetThrottle) 
+        .. ", smoothedThrottle: " .. tostring(throttleValue))
 end
+
 -----------------------------------------------------------------
 
 -- Main MPC
